@@ -63,28 +63,33 @@ def denoise_audio(audio_data: np.ndarray, sample_rate: int = SAMPLE_RATE) -> np.
     if len(audio_data.shape) > 1:
         audio_data = audio_data.mean(axis=1)  # Convert stereo to mono
     
-    # STFT
+    # STFT - use return_complex=True for PyTorch compatibility
     input_spec = torch.stft(
         torch.from_numpy(audio_data),
         n_fft=N_FFT,
         hop_length=HOP_LENGTH,
         win_length=WIN_LENGTH,
         window=torch.hann_window(WIN_LENGTH).pow(0.5),
-        return_complex=False
+        return_complex=True
     )
+    
+    # Convert complex to [real, imag] format for model
+    input_spec_real = torch.view_as_real(input_spec)  # [F, T, 2]
     
     # Inference
     with torch.no_grad():
-        output_spec = model(input_spec[None])[0]
+        output_spec = model(input_spec_real[None])[0]  # [B, F, T, 2]
+    
+    # Convert back to complex
+    output_spec_complex = torch.view_as_complex(output_spec[0])  # [F, T]
     
     # ISTFT
     enhanced = torch.istft(
-        output_spec,
+        output_spec_complex,
         n_fft=N_FFT,
         hop_length=HOP_LENGTH,
         win_length=WIN_LENGTH,
-        window=torch.hann_window(WIN_LENGTH).pow(0.5),
-        return_complex=False
+        window=torch.hann_window(WIN_LENGTH).pow(0.5)
     )
     
     return enhanced.detach().cpu().numpy()
