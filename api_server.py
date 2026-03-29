@@ -166,14 +166,78 @@ async def denoise_s3(request: DenoiseRequest):
         "output_s3_uri": "s3://bucket/path/to/output.pcm"
     }
     """
-    # For now, return a simple acknowledgment
-    # Full S3 support requires boto3 and proper credentials
-    return {
-        "status": "received",
-        "input_s3_uri": request.input_s3_uri,
-        "output_s3_uri": request.output_s3_uri,
-        "message": "S3-based denoising - configure boto3 for full support"
-    }
+    import boto3
+    from botocore.config import Config
+    
+    input_s3_uri = request.input_s3_uri
+    output_s3_uri = request.output_s3_uri
+    
+    # Parse S3 URIs
+    def parse_s3_uri(uri):
+        # s3://bucket/key format
+        if not uri.startswith('s3://'):
+            raise HTTPException(status_code=400, detail=f"Invalid S3 URI: {uri}")
+        parts = uri[5:].split('/', 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ''
+        return bucket, key
+    
+    input_bucket, input_key = parse_s3_uri(input_s3_uri)
+    output_bucket, output_key = parse_s3_uri(output_s3_uri)
+    
+    # Ensure same bucket for output
+    if input_bucket != output_bucket:
+        raise HTTPException(status_code=400, detail="Input and output must be in the same S3 bucket")
+    
+    # Create S3 client
+    s3_client = boto3.client('s3', config=Config(sign_alternative_service_names=['s3']))
+    
+    try:
+        # Download input file
+        print(f"Downloading s3://{input_bucket}/{input_key}")
+        response = s3_client.get_object(Bucket=input_bucket, Key=input_key)
+        content = response['Body'].read()
+        print(f"Downloaded {len(content)} bytes")
+        
+        # Try to read as audio file, fallback to raw PCM
+        try:
+            audio, sr = sf.read(io.BytesIO(content), dtype='float32')
+        except Exception:
+            # Interpret as 16-bit PCM at 16kHz
+            pcm_data = np.frombuffer(content, dtype=np.int16)
+            audio = pcm_data.astype(np.float32) / 32768.0
+            sr = SAMPLE_RATE
+            print(f"Interpreted as raw PCM: {len(audio)} samples")
+        
+        # Denoise
+        enhanced = denoise_audio(audio, sr)
+        
+        # Convert back to 16-bit PCM
+        enhanced_int16 = (enhanced * 32767).astype(np.int16)
+        
+        # Upload output file
+        output_content = enhanced_int16.tobytes()
+        print(f"Uploading {len(output_content)} bytes to s3://{output_bucket}/{output_key}")
+        s3_client.put_object(
+            Bucket=output_bucket,
+            Key=output_key,
+            Body=output_content,
+            ContentType='audio/pcm'
+        )
+        
+        return {
+            "status": "success",
+            "input_s3_uri": input_s3_uri,
+            "output_s3_uri": output_s3_uri,
+            "input_size_bytes": len(content),
+            "output_size_bytes": len(output_content),
+            "samples": len(enhanced),
+            "duration_sec": len(enhanced) / SAMPLE_RATE
+        }
+        
+    except Exception as e:
+        print(f"Error processing S3 request: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process audio: {str(e)}")
 
 
 if __name__ == "__main__":
