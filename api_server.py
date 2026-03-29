@@ -76,21 +76,22 @@ def denoise_audio(audio_data: np.ndarray, sample_rate: int = SAMPLE_RATE) -> np.
     # Convert complex to [real, imag] format for model
     input_spec_real = torch.view_as_real(input_spec)  # [F, T, 2]
     
-    # Inference
+    # Inference and ISTFT - all in no_grad to avoid gradient tracking
     with torch.no_grad():
-        output_spec = model(input_spec_real[None])[0]  # [B, F, T, 2]
-    
-    # Convert back to complex (need contiguous tensor)
-    output_spec_complex = torch.view_as_complex(output_spec[0].contiguous())  # [F, T]
-    
-    # ISTFT
-    enhanced = torch.istft(
-        output_spec_complex,
-        n_fft=N_FFT,
-        hop_length=HOP_LENGTH,
-        win_length=WIN_LENGTH,
-        window=torch.hann_window(WIN_LENGTH).pow(0.5)
-    )
+        # Model expects [B, F, T, 2] and returns [B, F, T, 2]
+        output_spec = model(input_spec_real.unsqueeze(0))[0]  # [F, T, 2]
+        
+        # Convert back to complex (need contiguous tensor)
+        output_spec_complex = torch.view_as_complex(output_spec.contiguous())  # [F, T]
+        
+        # ISTFT
+        enhanced = torch.istft(
+            output_spec_complex,
+            n_fft=N_FFT,
+            hop_length=HOP_LENGTH,
+            win_length=WIN_LENGTH,
+            window=torch.hann_window(WIN_LENGTH).pow(0.5)
+        )
     
     return enhanced.detach().cpu().numpy()
 
