@@ -80,8 +80,8 @@ def denoise_audio(audio_data: np.ndarray, sample_rate: int = SAMPLE_RATE) -> np.
     with torch.no_grad():
         output_spec = model(input_spec_real[None])[0]  # [B, F, T, 2]
     
-    # Convert back to complex
-    output_spec_complex = torch.view_as_complex(output_spec[0])  # [F, T]
+    # Convert back to complex (need contiguous tensor)
+    output_spec_complex = torch.view_as_complex(output_spec[0].contiguous())  # [F, T]
     
     # ISTFT
     enhanced = torch.istft(
