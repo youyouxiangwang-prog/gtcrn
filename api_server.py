@@ -190,7 +190,7 @@ async def denoise_s3(request: DenoiseRequest):
         raise HTTPException(status_code=400, detail="Input and output must be in the same S3 bucket")
     
     # Create S3 client
-    s3_client = boto3.client('s3', config=Config(sign_alternative_service_names=['s3']))
+    s3_client = boto3.client('s3')
     
     try:
         # Download input file
@@ -209,20 +209,36 @@ async def denoise_s3(request: DenoiseRequest):
             sr = SAMPLE_RATE
             print(f"Interpreted as raw PCM: {len(audio)} samples")
         
+        # Resample to 16kHz if needed
+        if sr != SAMPLE_RATE:
+            print(f"Resampling from {sr}Hz to {SAMPLE_RATE}Hz")
+            import resampy
+            audio = resampy.resample(audio, sr, SAMPLE_RATE)
+            sr = SAMPLE_RATE
+        
         # Denoise
         enhanced = denoise_audio(audio, sr)
         
         # Convert back to 16-bit PCM
         enhanced_int16 = (enhanced * 32767).astype(np.int16)
         
+        # Encode as WAV
+        wav_buffer = io.BytesIO()
+        sf.write(wav_buffer, enhanced_int16, SAMPLE_RATE, format='WAV')
+        wav_buffer.seek(0)
+        output_content = wav_buffer.read()
+        
+        # Ensure output key ends with .wav
+        if not output_key.lower().endswith('.wav'):
+            output_key += '.wav'
+        
         # Upload output file
-        output_content = enhanced_int16.tobytes()
         print(f"Uploading {len(output_content)} bytes to s3://{output_bucket}/{output_key}")
         s3_client.put_object(
             Bucket=output_bucket,
             Key=output_key,
             Body=output_content,
-            ContentType='audio/pcm'
+            ContentType='audio/wav'
         )
         
         return {
